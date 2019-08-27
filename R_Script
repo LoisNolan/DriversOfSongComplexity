@@ -1,0 +1,440 @@
+## HOUSEKEEPING ##
+# Clear the workspace #
+rm(list=ls())
+
+# Set the working directory #
+# Place the script files from Dr Joseph Tobias in a folder and set this as the working direcroty #
+setwd("C:/")
+
+######################################################
+
+## SUBSETTING DATA ##
+# Load the Complete GBD Dataset #
+SSD <- read.csv("Suboscine song data AVERAGED plus GBD 04082019.csv", header = TRUE)
+
+# Loads the dplyr 
+library(dplyr)
+
+#Subsets columns into a new dataset
+DS <- SSD%>%dplyr::select(GBD_Unique_Scientific_Name, Number_of_Note_Types, 
+                          Note.Count, Song.Duration..sec., Song2.Note2.rate, 
+                          Song_Bandwidth2, Note.Peak.Freq.Variance, Note_Length_Variance, 
+                          Habitat, SexualSelectionUnidirectional, Primary_Diet_updated, SpecGenFinalMass)
+
+# Removes all rows with NA's
+BirdData <- na.omit(DS)
+
+######################################################
+
+## STANDARDISING AND NORMALISING THE DATA ##
+## Scales and logs selected columns to standardise and normalise the data #
+# Categorical columns were not included #
+BirdData[c(2,3,4,5,6,7,8,12)] <- lapply(BirdData[c(2,3,4,5,6,7,8,12)], function(x) c(scale(log(x))))
+
+
+## ADDITIVE SCORE ##
+# Calculating the Additive Score in a new column #
+BD2 <- dplyr::mutate(BirdData, Song.Complex.Score = Number_of_Note_Types + Song.Duration..sec. + Note.Peak.Freq.Variance + Note_Length_Variance)
+
+## MERGING THE PHYLOGENETIC DATA WITH THE SONG DATA ##
+# Load the packages to read the nexus file and conduct the phylogenetic analysis #
+library(ape)
+library(caper)
+library(nlme)
+library(geiger)
+
+# Load the phylogenetic file #
+DraftTree1 <- read.nexus ("Tree.nex")
+
+# Create one Consesus Tree out of the multitree phylo tree #
+CTree <- consensus(DraftTree1, p = 0.5)
+Tree <- compute.brlen(CTree, 1)
+
+######################################################
+
+## MERGING DATASETS ##
+# Merge the phylogenetic dataset with the subsetted GBD data
+T1 <- comparative.data(data = BD2, phy = Tree, 
+                       names.col = "GBD_Unique_Scientific_Name", 
+                       vcv = TRUE,
+                       warn.dropped = TRUE)
+
+## IDENTIFYING DROPPED TIPS ##
+T1$dropped$tips
+T1$dropped$unmatched.rows
+
+######################################################
+## Assigning the variables ##
+
+Bandwidth <- T1$data$Song_Bandwidth2
+Pace <- T1$data$Song2.Note2.rate
+NotePeakV <- T1$data$Note.Peak.Freq.Variance
+NoteLengthV <-T1$data$Note_Length_Variance
+NoUS <- T1$data$Number_of_Note_Types
+BodyMass <- T1$data$SpecGenFinalMass
+SexualSelection <- T1$data$SexualSelectionUnidirectional
+Diet <- T1$data$Primary_Diet_updated
+Habitat <- T1$data$Habitat
+SongComplexityScore <- T1$data$Song.Complex.Score
+
+######################################################
+## PGLS ANALYSIS ##
+
+SongComplexityScore_m0 <- pgls(SongComplexityScore ~ SexualSelection + Diet + Habitat + BodyMass, T1, lambda = "ML")
+Bandwidth_m1 <- pgls(Bandwidth ~ SexualSelection + Diet + Habitat + BodyMass, T1, lambda = "ML")
+NoUS_m2 <- pgls(NoUS ~ SexualSelection + Diet + Habitat + BodyMass, T1 ,lambda = "ML")
+Pace_m3 <- pgls(Pace ~ SexualSelection + Diet + Habitat + BodyMass, T1, lambda = "ML")
+NotePeakVar_m4 <- pgls(NotePeakV ~ SexualSelection + Diet + Habitat + BodyMass, T1 ,lambda = "ML")
+NoteLengthVar_m5 <- pgls(NoteLengthV ~ SexualSelection + Diet + Habitat + BodyMass, T1 ,lambda = "ML")
+
+# Model Summaries #
+summary(SongComplexityScore_m0)
+summary(Bandwidth_m1)
+summary(NoUS_m2)
+summary(Pace_m3)
+summary(NotePeakVar_m4)
+summary(NoteLengthVar_m5)
+
+# Akaike information criterion scores #
+AIC(SongComplexityScore_m0)
+AIC(Bandwidth_m1)
+AIC(NoUS_m2)
+AIC(Pace_m3)
+AIC(NotePeakVar_m4)
+AIC(NoteLengthVar_m5)
+
+######################################################
+### VISUALISING THE DATA ###
+# Plotting Sexual Selection ~ Song Complexity Score #
+
+library(ape)
+library(ggtree)
+library(ggplot2)
+
+# Uploading the Phylogenetic Data #
+otree <- read.nexus("Tree.nex")
+tree<-otree[[1]]
+
+# Uploading the Datasets #
+df1 <- read.csv("SongComplexityScore.csv",
+                row.names=1)
+df1<-as.data.frame(df1)
+rownames(df1) <- tree$tip.label
+
+df2 <- read.csv("SexualSelection.csv",
+                row.names=1)
+df2 <- as.data.frame (df2)
+rownames(df2) <- tree$tip.label
+
+# Assigning colours #
+library(plyr)
+df2.col<-revalue(df2[,1], c("Monogamous"="lightseagreen", "Polygynous"="magenta4", "SemiMonogamous"="chocolate1"))
+names(df2.col) <- tree$tip.label
+
+# Editing the object #
+library(phylobase)
+# making the tree into a phylo4 object #
+g1<-as(tree,'phylo4') 
+# Adding tip colors into the phylo object #
+g2<-phylo4d(g1,df2.col) 
+
+# colouring all the internal branches #
+blacknodes<-data.frame(dt = sample(c('grey24'), nNodes(g1), replace=T),row.names = nodeId(g1, "internal"))
+nodeData(g2) <- blacknodes
+
+## plotting the inner tree #
+circ2<-ggtree(g2, aes(color=I(dt)),layout="circular")
+
+# Adding the outer heatmap #
+p9.2 <-  gheatmap(circ2, df1, offset=0.1, width=0.1, colnames = FALSE, color=NULL) + 
+  scale_fill_viridis_c(option="A", name="Song Complexity\nScore")
+plot(p9.2)
+
+########################################################
+## INDIVIDUAL MEASURES ##
+# Assigning the Colours #
+css <- c("deepskyblue3", "gold1", "firebrick3")
+cd <- c("magenta4", "turquoise3", "honeydew3", " darkorange ")
+ch <- c("deeppink2", " chartreuse3")
+
+### BANDWIDTH ###
+# Bandwidth ~ Sexual Selection #
+bwss <- ggplot(T1$data,  
+               aes(
+                 x=SexualSelection, 
+                 y=Bandwidth, 
+                 fill = factor(SexualSelection))) + 
+  geom_boxplot() +
+  theme_classic()+ 
+  labs(
+    title="Sexual Selection Score", 
+    y="Song\n Bandwidth")+ 
+  theme(
+    legend.position = "none", axis.title.y = element_text(size = 14, face = "bold"), axis.title.x = element_blank(),    plot.title = element_text(hjust = 0.5, face = "bold", size = 14)) + 
+  scale_x_continuous(
+    breaks = c(0.0, 1.0, 2.0), 
+    labels = c("0", "1", "2")) + scale_fill_manual(values = css)
+
+# Bandwidth ~ Habitat #
+bwh <- ggplot(T1$data, 
+              aes(
+                x=Habitat, 
+                y=Bandwidth, 
+                fill = factor(Habitat))) +
+  geom_boxplot() + scale_fill_manual(values = ch)+ theme_classic() + 
+  labs(
+    title="Habitat")+ 
+  theme(
+    legend.position = "none", axis.title.y = element_blank(), axis.title.x = element_blank(),    plot.title = element_text(hjust = 0.5, face = "bold", size = 14)) + 
+  scale_x_continuous(
+    breaks = c(1.0, 2.0), 
+    labels = c("Closed", "Open"))
+
+# Bandwidth ~ Diet #
+bwd <- ggplot(T1$data, 
+              aes(
+                x=Diet, 
+                y=Bandwidth, 
+                fill = factor(Diet))) +
+  geom_boxplot()+ theme_classic() + 
+  labs(
+    title="Diet") + 
+  theme(
+    legend.position = "none", axis.title.y = element_blank (),axis.title.x = element_blank(),   plot.title = element_text(hjust = 0.5, face = "bold", size = 14)) + scale_fill_manual(values = cd) + 
+  scale_x_continuous(
+    breaks = c(1, 2, 3, 4), 
+    labels = c("Insectivore", "Frugivore", "Nectarivore", "Herbivore"))
+
+
+# Bandwidth ~ Body mass #
+bwbm <- ggplot(T1$data, 
+               aes(
+                 x=BodyMass, 
+                 y=Bandwidth)) +
+  geom_point()+ theme_classic() + 
+  labs(
+    title="Body Mass (g)") + 
+  theme(
+    legend.position = "none", axis.title.y = element_blank(), axis.title.x = element_blank(),    plot.title = element_text(hjust = 0.5, face = "bold", size = 14))
+
+### PACE ###
+# Pace ~ Sexual Selection #
+pss <- ggplot(T1$data,  
+              aes(
+                x=SexualSelection, 
+                y=Pace, 
+                fill = factor(SexualSelection))) + 
+  geom_boxplot() +
+  theme_classic()+ 
+  labs( y="Song\nPace (s)")+ 
+  theme(
+    legend.position = "none", axis.title.y = element_text(size = 14, face = "bold"), axis.title.x = element_blank())+ 
+  scale_x_continuous(
+    breaks = c(0.0, 1.0, 2.0), 
+    labels = c("0", "1", "2")) + scale_fill_manual(values = css)
+
+# Pace ~ Habitat #
+ph <- ggplot(T1$data, 
+             aes(
+               x=Habitat, 
+               y= Pace, 
+               fill = factor(Habitat))) +
+  geom_boxplot() + scale_fill_manual(values = ch) + theme_classic() + 
+  theme(
+    legend.position = "none", axis.title.y = element_blank(),axis.title.x = element_blank(),
+    plot.title = element_text(hjust = 0.5)) + 
+  scale_x_continuous(
+    breaks = c(1.0, 2.0), 
+    labels = c("Closed", "Open"))
+
+# Pace ~ Diet #
+pd <- ggplot(T1$data, 
+             aes(
+               x=Diet, 
+               y= Pace, 
+               fill = factor(Diet))) +
+  geom_boxplot()+ theme_classic() + 
+  theme(
+    legend.position = "none", axis.title.y = element_blank(),axis.title.x = element_blank(),
+    
+    plot.title = element_text(hjust = 0.5)) + scale_fill_manual(values = cd) + 
+  scale_x_continuous(
+    breaks = c(1, 2, 3, 4), 
+    labels = c("Insectivore", "Frugivore", "Nectarivore", "Herbivore"))
+
+# Pace ~ Body mass #
+pbm <- ggplot(T1$data, 
+              aes(
+                x=BodyMass, 
+                y= Pace)) +
+  geom_point()+ theme_classic() + 
+  theme(
+    legend.position = "none", axis.title.y = element_blank(),axis.title.x = element_blank(),
+    plot.title = element_text(hjust = 0.5)) 
+
+### Number of Unique Syllables ###
+# NoUS ~ Sexual Selection #
+nss <- ggplot(T1$data,  
+              aes(
+                x=SexualSelection, 
+                y= NoUS, 
+                fill = factor(SexualSelection))) + 
+  geom_boxplot() +
+  theme_classic()+ 
+  labs( y="Number of\nUnique Syllables ") +
+  theme(
+    legend.position = "none", axis.title.y = element_text(size = 14, face = "bold"), axis.title.x = element_blank()) + 
+  scale_x_continuous(
+    breaks = c(0.0, 1.0, 2.0), 
+    labels = c("0", "1", "2")) + scale_fill_manual(values = css)
+
+# NoUS ~ Habitat #
+nh <- ggplot(T1$data, 
+             aes(
+               x=Habitat, 
+               y=NoUS , 
+               fill = factor(Habitat))) +
+  geom_boxplot() + scale_fill_manual(values = ch)+ theme_classic()+ 
+  theme(
+    legend.position = "none", axis.title.y = element_blank(), axis.title.x = element_blank(),
+    plot.title = element_text(hjust = 0.5)) + 
+  scale_x_continuous(
+    breaks = c(1.0, 2.0), 
+    labels = c("Closed", "Open"))
+
+# NoUS ~ Diet #
+nd <- ggplot(T1$data, 
+             aes(
+               x=Diet, 
+               y=NoUS , 
+               fill = factor(Diet))) +
+  geom_boxplot()+ theme_classic() + 
+  theme(
+    legend.position = "none", axis.title.y = element_blank(), axis.title.x = element_blank(),
+    plot.title = element_text(hjust = 0.5)) + scale_fill_manual(values = cd) + 
+  scale_x_continuous(
+    breaks = c(1, 2, 3, 4), 
+    labels = c("Insectivore", "Frugivore", "Nectarivore", "Herbivore"))
+
+# NoUS ~ Body mass #
+nbm <- ggplot(T1$data, 
+              aes(
+                x=BodyMass, 
+                y= NoUS)) +
+  geom_point()+ theme_classic()+ 
+  theme(
+    legend.position = "none", axis.title.y = element_blank(),axis.title.x = element_blank(),
+    plot.title = element_text(hjust = 0.5)) 
+
+### Note Peak Variance ###
+# NotePeakV ~ Sexual Selection #
+pvss <- ggplot(T1$data,  
+               aes(
+                 x=SexualSelection, 
+                 y=NotePeakV , 
+                 fill = factor(SexualSelection))) + 
+  geom_boxplot() +
+  theme_classic()+ 
+  labs(y = "Note Peak\nVariance") + 
+  theme(
+    legend.position = "none", axis.title.y = element_text(size = 14, face = "bold"), axis.title.x = element_blank(),
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14)) + 
+  scale_x_continuous(
+    breaks = c(0.0, 1.0, 2.0), 
+    labels = c("0", "1", "2")) + scale_fill_manual(values = css)
+
+# NotePeakV ~ Habitat #
+pvh <- ggplot(T1$data, 
+              aes(
+                x=Habitat, 
+                y=NotePeakV , 
+                fill = factor(Habitat))) +
+  geom_boxplot() + scale_fill_manual(values = ch)+ theme_classic() + 
+  theme(
+    legend.position = "none", axis.title.y = element_blank(),axis.title.x = element_blank(),
+    plot.title = element_text(hjust = 0.5)) + 
+  scale_x_continuous(
+    breaks = c(1.0, 2.0), 
+    labels = c("Closed", "Open"))
+
+# NotePeakV ~ Diet #
+pvd <- ggplot(T1$data, 
+              aes(
+                x=Diet, 
+                y=NotePeakV , 
+                fill = factor(Diet))) +
+  geom_boxplot()+ theme_classic()+ 
+  theme(
+    legend.position = "none", axis.title.y = element_blank(),axis.title.x=element_blank(),
+    plot.title = element_text(hjust = 0.5)) + scale_fill_manual(values = cd) + 
+  scale_x_continuous(
+    breaks = c(1, 2, 3, 4), 
+    labels = c("Insectivore", "Frugivore", "Nectarivore", "Herbivore"))
+
+# NotePeakV ~ Body mass #
+pvbm <- ggplot(T1$data, 
+               aes(
+                 x=BodyMass, 
+                 y=NotePeakV )) +
+  geom_point()+ theme_classic() + 
+  theme(
+    legend.position = "none", axis.title.y = element_blank(),axis.title.x=element_blank(),
+    plot.title = element_text(hjust = 0.5)) 
+
+### Note Length Variance ###
+# NoteLengthV ~ Sexual Selection #
+lvss <- ggplot(T1$data,  
+               aes(
+                 x=SexualSelection, 
+                 y=NoteLengthV , 
+                 fill = factor(SexualSelection))) + 
+  geom_boxplot() +
+  theme_classic()+ 
+  labs(y="Note Length\nVariance ")+ 
+  theme(legend.position = "none", axis.title.y = element_text(size = 14, face = "bold"), 
+        axis.title.x = element_blank(),plot.title = element_text(
+          hjust = 0.5, face = "bold", size = 14)) + scale_x_continuous(
+    breaks = c(0.0, 1.0, 2.0), 
+    labels = c("0", "1", "2")) + scale_fill_manual(values = css)
+
+# NoteLengthV ~ Habitat #
+lvh <- ggplot(T1$data, 
+              aes(
+                x=Habitat, 
+                y=NoteLengthV , 
+                fill = factor(Habitat))) +
+  geom_boxplot() + scale_fill_manual(values = ch)+ theme_classic() + 
+  theme(
+    legend.position = "none", axis.title.y = element_blank(),axis.title.x = element_blank(),
+    plot.title = element_text(hjust = 0.5)) + 
+  scale_x_continuous(
+    breaks = c(1.0, 2.0), 
+    labels = c("Closed", "Open"))
+
+# NoteLengthV ~ Diet #
+lvd <- ggplot(T1$data, 
+              aes(
+                x=Diet, 
+                y=NoteLengthV , 
+                fill = factor(Diet))) +
+  geom_boxplot()+ theme_classic()+ 
+  theme(
+    legend.position = "none", axis.title.y = element_blank(),axis.title.x = element_blank(),
+    plot.title = element_text(hjust = 0.5)) + scale_fill_manual(values = cd) + 
+  scale_x_continuous(
+    breaks = c(1, 2, 3, 4), 
+    labels = c("Insectivore", "Frugivore", "Nectarivore", "Herbivore"))
+
+# NoteLengthV ~ Body mass #
+lvbm <- ggplot(T1$data, 
+               aes(
+                 x=BodyMass, 
+                 y=NoteLengthV )) +
+  geom_point()+ theme_classic() + 
+  theme(
+    legend.position = "none", axis.title.y = element_blank(),axis.title.x = element_blank(),
+    plot.title = element_text(hjust = 0.5)) 
+
+# Visualising the plots together #
+library(gridExtra)
+grid.arrange(bwss,bwh,bwd,bwbm,pss,ph,pd,pbm,nss,nh,nd,nbm,pvss,pvh,pvd,pvbm,lvss,lvh,lvd,lvbm, ncol=4)
