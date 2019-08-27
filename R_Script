@@ -3,7 +3,7 @@
 rm(list=ls())
 
 # Set the working directory #
-# Place the script files from Dr Joseph Tobias in a folder and set this as the working direcroty #
+# Place the datasets requested from Dr Joseph Tobias in a folder and set this as the working direcroty #
 setwd("C:/")
 
 ######################################################
